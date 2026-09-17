@@ -1,0 +1,81 @@
+# Podman Compose definition for the compliance evaluator stack.
+#
+# Requires a compose provider (podman-compose or docker-compose). If none is
+# installed, use the equivalent plain-podman commands in the Makefile
+# (make up / make down) — they do the same thing.
+#
+# The bundled Elasticsearch is started by default. To use an external
+# Elasticsearch instead, set ELASTICSEARCH_URL in .env and skip the
+# elasticsearch service.
+
+name: compliance
+
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: deploy/podman/Containerfile
+    image: localhost/compliance-evaluator:local
+    container_name: compliance-evaluator
+    ports:
+      - "8090:8090"
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      ELASTICSEARCH_URL: ${ELASTICSEARCH_URL:-http://compliance-es:9200}
+      OLLAMA_URL: ${OLLAMA_URL:-http://compliance-ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-ollama}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+      EMBEDDING_DIMS: ${EMBEDDING_DIMS:-768}
+      CHUNK_SIZE: ${CHUNK_SIZE:-1000}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-150}
+      TOP_K: ${TOP_K:-8}
+      MIN_SIMILARITY: ${MIN_SIMILARITY:-0.5}
+      MAX_EVIDENCE_CHUNKS: ${MAX_EVIDENCE_CHUNKS:-6}
+      MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-25}
+      UPLOAD_DIR: /data/uploads
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - compliance-uploads:/data/uploads
+    networks:
+      - compliance-net
+    depends_on:
+      - ollama
+      - elasticsearch
+    restart: unless-stopped
+
+  ollama:
+    image: docker.io/ollama/ollama:latest
+    container_name: compliance-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - compliance-ollama-models:/root/.ollama
+    networks:
+      - compliance-net
+    restart: unless-stopped
+
+  elasticsearch:
+    image: docker.io/library/elasticsearch:8.19.9
+    container_name: compliance-es
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - compliance-esdata:/usr/share/elasticsearch/data
+    networks:
+      - compliance-net
+    restart: unless-stopped
+
+networks:
+  compliance-net:
+    name: compliance-net
+
+volumes:
+  compliance-uploads:
+  compliance-ollama-models:
+  compliance-esdata:
