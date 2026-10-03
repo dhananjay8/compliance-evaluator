@@ -36,6 +36,11 @@ ingest_documents ─► extract_text ─► classify ─► normalize
 - `documents/extraction/pdf.py` — PyMuPDF page-level text + bold-heading
   detection; whitespace-normalized but verbatim-preserving (citations must
   remain exact substrings).
+- `documents/extraction/docx.py` — structure-aware .docx extraction: emits
+  one logical section per heading (Heading1–6 styles, embedded altChunk
+  HTML, or bold-run heuristic for unstyled docs) with `heading_path`
+  metadata; tables serialized as atomic blocks. `DocumentExtractor`
+  dispatches on extension.
 - `documents/classification/classifier.py` — three modes: explicit routing
   (upload-time `document_type`), heuristic (filename + keyword scoring),
   LLM fallback (JSON-only classification below confidence threshold).

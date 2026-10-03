@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from app.config import Settings
 from app.documents.chunking.chunker import PolicyChunker
 from app.documents.classification.classifier import DocumentClassifier
-from app.documents.extraction.pdf import PdfExtractor
+from app.documents.extraction import DocumentExtractor
 from app.elasticsearch.store import ElasticsearchStore
 from app.embeddings.provider import EmbeddingProvider
 from app.llm.provider import LLMProvider
@@ -23,7 +23,7 @@ class GraphContext:
     settings: Settings
     store: ElasticsearchStore
     storage: LocalStorage
-    extractor: PdfExtractor
+    extractor: DocumentExtractor
     classifier: DocumentClassifier
     chunker: PolicyChunker
     embedder: EmbeddingProvider

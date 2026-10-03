@@ -41,12 +41,13 @@ class DocumentRef(BaseModel):
 
 
 class ExtractedPage(BaseModel):
-    page_number: int  # 1-based
+    page_number: int  # 1-based (for .docx: logical section index)
     text: str
     char_offset_start: int = 0
     char_offset_end: int = 0
     headings: list[str] = Field(default_factory=list)
     empty: bool = False
+    metadata: dict = Field(default_factory=dict)  # e.g. heading_path for .docx
 
 
 class ExtractedDocument(BaseModel):

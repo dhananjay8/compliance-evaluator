@@ -4,13 +4,18 @@ Policy documents are untrusted input. Injection detection is observational
 (flag + log) — the architectural defense is prompt isolation in the evaluator.
 """
 
+import io
 import re
 import unicodedata
+import zipfile
 
 from app.config import Settings, get_settings
 from app.core.errors import UploadValidationError
 
-PDF_MAGIC = b"%PDF-"
+_MAGIC_BY_EXT: dict[str, bytes] = {
+    ".pdf": b"%PDF-",
+    ".docx": b"PK\x03\x04",  # zip container
+}
 
 _INJECTION_PATTERNS = [
     re.compile(r"ignore\s+(all\s+)?(previous|prior|above)\s+(instructions?|rules?|prompts?)", re.I),
@@ -35,7 +40,7 @@ def sanitize_filename(filename: str) -> str:
 
 
 def validate_upload(filename: str, data: bytes, settings: Settings | None = None) -> str:
-    """Validate extension, size, and PDF magic bytes. Returns sanitized filename."""
+    """Validate extension, size, and magic bytes. Returns sanitized filename."""
     settings = settings or get_settings()
     safe_name = sanitize_filename(filename)
 
@@ -50,8 +55,11 @@ def validate_upload(filename: str, data: bytes, settings: Settings | None = None
         raise UploadValidationError(
             f"File exceeds {settings.max_file_size_mb} MB limit ({len(data)} bytes)"
         )
-    if not data[:5] == PDF_MAGIC:
-        raise UploadValidationError("File is not a valid PDF (bad magic bytes)")
+    magic = _MAGIC_BY_EXT.get(ext)
+    if magic and not data.startswith(magic):
+        raise UploadValidationError(f"File is not a valid {ext} (bad magic bytes)")
+    if ext == ".docx" and not zipfile.is_zipfile(io.BytesIO(data)):
+        raise UploadValidationError("File is not a valid .docx (not a zip container)")
     return safe_name
 
 

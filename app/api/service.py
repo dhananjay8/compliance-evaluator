@@ -19,6 +19,16 @@ from app.security.validation import validate_upload
 
 log = get_logger(__name__)
 
+_CONTENT_TYPES = {
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+
+
+def _content_type_for(filename: str) -> str:
+    ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return _CONTENT_TYPES.get(ext, "application/octet-stream")
+
 
 class AssessmentService:
     def __init__(self, ctx: GraphContext, settings: Settings | None = None):
@@ -70,6 +80,7 @@ class AssessmentService:
                     document_id=document_id,
                     assessment_id=assessment_id,
                     filename=safe_name,
+                    content_type=_content_type_for(safe_name),
                     size_bytes=len(data),
                     sha256=sha,
                     storage_path=str(path),

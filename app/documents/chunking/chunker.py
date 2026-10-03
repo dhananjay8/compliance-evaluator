@@ -90,22 +90,22 @@ class PolicyChunker:
                 # flush buffer
                 if buffer:
                     chunk_index = self._emit(
-                        chunks, extracted, doc_type, page.page_number,
-                        section, buffer, chunk_index,
+                        chunks, extracted, doc_type, page, section,
+                        buffer, chunk_index,
                     )
                 if len(para) <= self.size:
                     buffer = para
                 else:
                     for piece in _hard_split(para, self.size, self.overlap):
                         chunk_index = self._emit(
-                            chunks, extracted, doc_type, page.page_number,
-                            section, piece, chunk_index,
+                            chunks, extracted, doc_type, page, section,
+                            piece, chunk_index,
                         )
                     buffer = ""
             if buffer:
                 chunk_index = self._emit(
-                    chunks, extracted, doc_type, page.page_number,
-                    section, buffer, chunk_index,
+                    chunks, extracted, doc_type, page, section,
+                    buffer, chunk_index,
                 )
 
         return chunks
@@ -115,7 +115,7 @@ class PolicyChunker:
         chunks: list[PolicyChunk],
         extracted: ExtractedDocument,
         doc_type: DocumentCategory,
-        page_number: int,
+        page: ExtractedPage,
         section: str | None,
         text: str,
         chunk_index: int,
@@ -127,13 +127,14 @@ class PolicyChunker:
             assessment_id=extracted.assessment_id,
             filename=extracted.filename,
             document_type=doc_type,
-            page_number=page_number,
-            page_end=page_number,
+            page_number=page.page_number,
+            page_end=page.page_number,
             section=section,
             chunk_index=chunk_index,
             text=text,
             content_hash=chunk_content_hash(
-                extracted.document_id, page_number, chunk_index, text
+                extracted.document_id, page.page_number, chunk_index, text
             ),
+            metadata=dict(page.metadata),
         ))
         return chunk_index + 1

@@ -6,7 +6,7 @@ from app.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.documents.chunking.chunker import PolicyChunker
 from app.documents.classification.classifier import DocumentClassifier
-from app.documents.extraction.pdf import PdfExtractor
+from app.documents.extraction import DocumentExtractor
 from app.elasticsearch.client import get_es_client
 from app.elasticsearch.store import ElasticsearchStore
 from app.embeddings.provider import get_embedding_provider
@@ -29,7 +29,7 @@ def build_context(settings: Settings | None = None) -> GraphContext:
         settings=settings,
         store=store,
         storage=LocalStorage(settings),
-        extractor=PdfExtractor(),
+        extractor=DocumentExtractor(),
         classifier=DocumentClassifier(settings, llm=llm),
         chunker=PolicyChunker(settings),
         embedder=embedder,

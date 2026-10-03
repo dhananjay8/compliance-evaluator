@@ -1,11 +1,37 @@
+# Python / tooling
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+.eggs/
 .venv/
+env/
+venv/
 .env
-data/
-fixtures/policies/*.pdf
+*.env
+
+# Test / coverage / lint caches
 .pytest_cache/
 .ruff_cache/
-*.egg-info/
+.mypy_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.cache/
+
+# Build artifacts
 dist/
 build/
+*.spec
+
+# Data / fixtures
+data/
+fixtures/policies/*.pdf
+
+# IDE / OS
+.DS_Store
+*.log
+.vscode/
+.idea/

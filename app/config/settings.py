@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     max_file_size_mb: int = Field(default=25, alias="MAX_FILE_SIZE_MB")
     max_files_per_assessment: int = Field(default=20, alias="MAX_FILES_PER_ASSESSMENT")
     upload_dir: Path = Field(default=Path("/data/uploads"), alias="UPLOAD_DIR")
-    allowed_extensions: tuple[str, ...] = (".pdf",)
+    allowed_extensions: tuple[str, ...] = (".pdf", ".docx")
 
     # --- Evaluation ---
     evaluation_max_rule_workers: int = Field(default=1, alias="EVALUATION_MAX_RULE_WORKERS")

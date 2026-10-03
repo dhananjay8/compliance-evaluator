@@ -95,7 +95,7 @@ podman run -d --name compliance-evaluator --network compliance-net -p 8090:8090 
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/api/v1/assessments` | Create assessment (`name`, `framework`) |
-| `POST` | `/api/v1/assessments/{id}/documents` | Upload PDFs (multipart; optional `document_type` per file for explicit routing) |
+| `POST` | `/api/v1/assessments/{id}/documents` | Upload policy docs — PDF or DOCX (multipart; optional `document_type` per file for explicit routing) |
 | `POST` | `/api/v1/assessments/{id}/evaluate` | Start evaluation (optional `rule_ids` subset) |
 | `GET` | `/api/v1/assessments/{id}` | Status + summary |
 | `GET` | `/api/v1/assessments/{id}/results` | All criterion results |
