@@ -7,7 +7,7 @@ Uses POST /api/chat with `format` set to a JSON schema when provided
 from typing import Any
 
 import httpx
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from app.config import Settings, get_settings
 from app.core.errors import LLMError, LLMTimeoutError
@@ -29,16 +29,19 @@ class OllamaLLMProvider:
     def model_name(self) -> str:
         return self._model
 
-    @retry(
-        retry=retry_if_exception_type((httpx.TransportError,)),
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=8),
-        reraise=True,
-    )
     async def _chat(self, payload: dict[str, Any]) -> dict[str, Any]:
-        resp = await self._client.post("/api/chat", json=payload)
-        resp.raise_for_status()
-        return resp.json()
+        retryer = AsyncRetrying(
+            retry=retry_if_exception_type((httpx.TransportError,)),
+            stop=stop_after_attempt(1 + self.settings.llm_max_retries),
+            wait=wait_exponential(multiplier=1, min=1, max=8),
+            reraise=True,
+        )
+        async for attempt in retryer:
+            with attempt:
+                resp = await self._client.post("/api/chat", json=payload)
+                resp.raise_for_status()
+                return resp.json()
+        raise AssertionError("Retry loop ended without a result")
 
     async def complete(
         self,
@@ -92,7 +95,11 @@ class OllamaLLMProvider:
             if resp.status_code != 200:
                 return False
             models = {m.get("name", "") for m in resp.json().get("models", [])}
-            base = self._model.split(":")[0]
-            return any(m == self._model or m.split(":")[0] == base for m in models)
+            return self._model in models or (
+                ":" not in self._model and f"{self._model}:latest" in models
+            )
         except Exception:  # noqa: BLE001
             return False
+
+    async def close(self) -> None:
+        await self._client.aclose()

@@ -5,6 +5,8 @@ Kept outside LangGraph state so the state stays serializable.
 
 from dataclasses import dataclass
 
+from app.compliance.evaluator import ComplianceEvaluator
+from app.compliance.gap import GapAnalyzer
 from app.config import Settings
 from app.documents.chunking.chunker import PolicyChunker
 from app.documents.classification.classifier import DocumentClassifier
@@ -13,8 +15,6 @@ from app.elasticsearch.store import ElasticsearchStore
 from app.embeddings.provider import EmbeddingProvider
 from app.llm.provider import LLMProvider
 from app.retrieval.retriever import EvidenceRetriever
-from app.compliance.evaluator import ComplianceEvaluator
-from app.compliance.gap import GapAnalyzer
 from app.storage.local import LocalStorage
 
 

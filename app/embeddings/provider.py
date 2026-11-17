@@ -26,6 +26,8 @@ class EmbeddingProvider(Protocol):
 
     async def health(self) -> bool: ...
 
+    async def close(self) -> None: ...
+
 
 _provider: EmbeddingProvider | None = None
 
@@ -51,3 +53,11 @@ def get_embedding_provider(settings: Settings | None = None) -> EmbeddingProvide
 def reset_embedding_provider() -> None:
     global _provider
     _provider = None
+
+
+async def close_embedding_provider() -> None:
+    global _provider
+    provider = _provider
+    _provider = None
+    if provider is not None:
+        await provider.close()

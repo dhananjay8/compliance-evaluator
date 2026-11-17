@@ -6,7 +6,6 @@ calls without any external infrastructure.
 
 import json
 import uuid
-from pathlib import Path
 
 import pytest
 

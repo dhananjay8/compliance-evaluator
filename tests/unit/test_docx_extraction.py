@@ -8,7 +8,7 @@ import pytest
 
 from app.core.errors import DocumentExtractionError, UploadValidationError
 from app.documents.chunking.chunker import PolicyChunker
-from app.documents.extraction import DocxExtractor, DocumentExtractor
+from app.documents.extraction import DocumentExtractor, DocxExtractor
 from app.schemas.document import DocumentRef
 from app.security.validation import validate_upload
 
@@ -168,6 +168,20 @@ def test_dispatcher_routes_docx(tmp_path):
     path = _doc(tmp_path / "d.docx", _p("Purpose", "Heading1") + _p("Body."))
     result = DocumentExtractor().extract(_ref(tmp_path, "d.docx"), path)
     assert result.pages[0].headings == ["Purpose"]
+
+
+def test_dispatcher_uses_validated_filename_not_opaque_storage_suffix(tmp_path, monkeypatch):
+    path = tmp_path / "document-id.pdf"
+    doc_ref = _ref(tmp_path, "policy.docx")
+    expected = DocxExtractor().extract(
+        doc_ref, _doc(tmp_path / "source.docx", _p("Purpose", "Heading1") + _p("Body."))
+    )
+    extractor = DocumentExtractor()
+    monkeypatch.setattr(extractor._docx, "extract", lambda ref, stored_path: expected)
+
+    result = extractor.extract(doc_ref, path)
+
+    assert result is expected
 
 
 def test_validate_upload_accepts_docx(tmp_path, settings):

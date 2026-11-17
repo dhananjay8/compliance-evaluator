@@ -4,7 +4,6 @@ import pytest
 from pydantic import ValidationError
 
 from app.compliance.aggregation import aggregate_results, build_criterion_result
-from app.schemas.assessment import CriterionResult
 from app.schemas.evaluation import (
     ComplianceEvaluation,
     EvidenceStatus,

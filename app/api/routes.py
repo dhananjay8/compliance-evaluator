@@ -1,8 +1,10 @@
 """REST endpoints."""
 
+import asyncio
 import json
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
 
 from app.api.schemas import (
     CreateAssessmentRequest,
@@ -14,7 +16,7 @@ from app.api.schemas import (
     StatusResponse,
 )
 from app.api.service import AssessmentService
-from app.core.errors import AppError, UploadValidationError
+from app.core.errors import UploadValidationError
 from app.schemas.assessment import AssessmentResultsResponse
 
 router = APIRouter()
@@ -150,13 +152,23 @@ async def health_check():
 @health.get("/ready")
 async def readiness(request: Request):
     ctx = request.app.state.graph_context
-    es_ok = await ctx.store.ping()
-    llm_ok = await ctx.llm.health()
-    emb_ok = await ctx.embedder.health()
+    checks = await asyncio.gather(
+        ctx.store.ping(),
+        ctx.llm.health(),
+        ctx.embedder.health(),
+        return_exceptions=True,
+    )
+    es_ok, llm_result, emb_result = checks
+    es_ok = es_ok is True
+    llm_ok = llm_result is True
+    emb_ok = emb_result is True
     ready = es_ok and llm_ok and emb_ok
-    return {
-        "ready": ready,
-        "elasticsearch": es_ok,
-        "llm": {"ok": llm_ok, "model": ctx.llm.model_name},
-        "embeddings": {"ok": emb_ok, "model": ctx.embedder.model_name},
-    }
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={
+            "ready": ready,
+            "elasticsearch": es_ok,
+            "llm": {"ok": llm_ok, "model": ctx.llm.model_name},
+            "embeddings": {"ok": emb_ok, "model": ctx.embedder.model_name},
+        },
+    )
