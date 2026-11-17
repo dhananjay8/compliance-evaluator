@@ -1,9 +1,9 @@
 # Compliance Evaluator
 
-A locally runnable, open-source compliance-policy evaluation platform. Upload
-policy PDFs, and the system evaluates them against a matrix of atomic
+A locally runnable compliance-policy evaluation platform. Upload
+policy PDFs or DOCX files, and the system evaluates them against a matrix of atomic
 compliance rules (SOC 2–style) using hybrid Elasticsearch retrieval and a
-locally hosted LLM — producing binary verdicts anchored to **verbatim PDF
+locally hosted LLM — producing binary verdicts anchored to **verbatim source
 citations**, with AI-generated gap analysis for every gap.
 
 No OpenAI dependency. Everything runs on your machine: FastAPI + LangGraph +
@@ -23,7 +23,26 @@ rules (ES) ──► per rule: hybrid retrieve (kNN+BM25) ──► LLM evaluate
 
 Orchestrated as a LangGraph state machine with typed state, per-node error
 capture, and a conditional per-rule evaluation loop. See
-[docs/architecture.md](docs/architecture.md).
+[docs/architecture.md](docs/architecture.md) for the component and state-flow
+diagrams.
+
+```mermaid
+flowchart LR
+    Client --> API[FastAPI]
+    API --> Service[Assessment service]
+    Service --> Graph[LangGraph pipeline]
+    Graph --> Extract[PDF / DOCX extraction]
+    Extract --> Classify[Document classification]
+    Classify --> Chunk[Chunk and embed]
+    Chunk --> ES[(Elasticsearch)]
+    Rules[(Framework rules)] --> Graph
+    ES --> Retrieve[Hybrid kNN + BM25 retrieval]
+    Retrieve --> Evaluate[Structured LLM evaluation]
+    Evaluate --> Citation[Verbatim citation validation]
+    Citation --> Report[Aggregate, analyze gaps, persist]
+    Report --> ES
+    Graph --> LLM[Ollama or configured provider]
+```
 
 ## Guarantees
 
@@ -33,12 +52,15 @@ capture, and a conditional per-rule evaluation loop. See
   citation quote is an exact substring of the cited chunk's stored text.
   Paraphrased or fabricated citations are rejected and the verdict is
   downgraded.
-- **Prompt-injection defense** — policy text is treated as untrusted data:
-  wrapped in delimiters, never concatenated into instructions, and scanned
-  for injection patterns. Verdict semantics are enforced in code, not by the
-  model.
+- **Prompt-injection defense** — policy text is treated as untrusted data,
+  wrapped in delimiters, and scanned for suspicious patterns. Logs contain
+  pattern identifiers, not excerpts of policy text. Verdict semantics are
+  enforced in code, not by the model.
 - **Full traceability** — every verdict links back to filename, page number,
   section, chunk id, and the verbatim quote.
+- **Conservative failure handling** — failed retrieval is not represented as
+  evidence absence; affected rule results are omitted and the assessment is
+  marked `PARTIAL`.
 
 ## Quick start (Podman)
 
@@ -96,49 +118,99 @@ podman run -d --name compliance-evaluator --network compliance-net -p 8090:8090 
 |---|---|---|
 | `POST` | `/api/v1/assessments` | Create assessment (`name`, `framework`) |
 | `POST` | `/api/v1/assessments/{id}/documents` | Upload policy docs — PDF or DOCX (multipart; optional `document_type` per file for explicit routing) |
-| `POST` | `/api/v1/assessments/{id}/evaluate` | Start evaluation (optional `rule_ids` subset) |
+| `POST` | `/api/v1/assessments/{id}/evaluate` | Start evaluation (optional active `rule_ids` subset in the assessment framework) |
 | `GET` | `/api/v1/assessments/{id}` | Status + summary |
 | `GET` | `/api/v1/assessments/{id}/results` | All criterion results |
 | `GET` | `/api/v1/assessments/{id}/results/{rule_id}` | Single result with citations + gap |
 | `GET` | `/health` `/ready` | Liveness / readiness (ES, Ollama, embedder) |
 
-```bash
-curl -X POST localhost:8090/api/v1/assessments \
-  -H 'Content-Type: application/json' -d '{"name":"demo","framework":"SOC2"}'
+The create request selects the framework; evaluation uses that stored framework.
+Unknown, inactive, or cross-framework rule IDs are rejected. The upload limit
+applies to the total document count per assessment, not just one request.
 
-curl -X POST localhost:8090/api/v1/assessments/$AID/documents \
+```bash
+ASSESSMENT_JSON=$(curl -sS -X POST http://localhost:8090/api/v1/assessments \
+  -H 'Content-Type: application/json' -d '{"name":"demo","framework":"SOC2"}')
+AID=$(printf '%s' "$ASSESSMENT_JSON" | python3 -c \
+  'import json,sys; print(json.load(sys.stdin)["assessment_id"])')
+echo "assessment_id=$AID"
+
+curl -sS -X POST "http://localhost:8090/api/v1/assessments/$AID/documents" \
   -F 'files=@fixtures/policies/access_control_policy.pdf' \
   -F 'files=@fixtures/policies/incident_response_policy.pdf'
 
-curl -X POST localhost:8090/api/v1/assessments/$AID/evaluate \
-  -H 'Content-Type: application/json' -d '{}'
+curl -sS -X POST "http://localhost:8090/api/v1/assessments/$AID/evaluate" \
+  -H 'Content-Type: application/json' \
+  -d '{"rule_ids":["SOC2-CC6.1-004"]}'
+
+curl -sS "http://localhost:8090/api/v1/assessments/$AID"
+curl -sS "http://localhost:8090/api/v1/assessments/$AID/results"
 ```
 
 ## Configuration
 
-All settings via environment variables (see `.env.example`):
+All settings are externalized; `.env.example` documents the complete
+configuration. Frequently tuned values:
 
-- `OLLAMA_MODEL` (default `qwen2.5:3b`), `OLLAMA_URL`
-- `EMBEDDING_PROVIDER` = `ollama` | `sentence_transformers`,
-  `EMBEDDING_MODEL` (default `nomic-embed-text`), `EMBEDDING_DIMS` (768)
-- `CHUNK_SIZE` (1000), `CHUNK_OVERLAP` (150)
-- `TOP_K` (8), `MIN_SIMILARITY` (0.5), `MAX_EVIDENCE_CHUNKS` (6)
-- `MAX_FILE_SIZE_MB` (25), `MAX_FILES_PER_ASSESSMENT` (20)
-- `CLASSIFIER_LLM_ENABLED`, `CLASSIFIER_LLM_THRESHOLD` (0.55)
+| Setting | Default | Notes |
+|---|---:|---|
+| `ELASTICSEARCH_URL` | `http://localhost:9200` | ES 8.x endpoint |
+| `OLLAMA_URL` | `http://localhost:11434` | LLM and embedding endpoint |
+| `OLLAMA_MODEL` | `qwen2.5:3b` | The exact configured model tag must be available |
+| `EMBEDDING_PROVIDER` | `ollama` | `ollama` or optional `sentence_transformers` |
+| `EMBEDDING_MODEL` / `EMBEDDING_DIMS` | `nomic-embed-text` / `768` | Must match the selected embedding model and ES mapping |
+| `CHUNK_SIZE` / `CHUNK_OVERLAP` | `1000` / `150` | Overlap must be smaller than chunk size |
+| `TOP_K` / `MIN_SIMILARITY` | `8` / `0.5` | Similarity threshold is normalized to `[0, 1]` |
+| `MAX_FILE_SIZE_MB` | `25` | Per-file compressed upload limit |
+| `MAX_DOCX_UNCOMPRESSED_SIZE_MB` | `100` | Limits ZIP expansion before DOCX extraction |
+| `MAX_FILES_PER_ASSESSMENT` | `20` | Cumulative document count |
+| `LLM_MAX_RETRIES` / `EMBEDDING_MAX_RETRIES` | `2` / `2` | Retries after the first network attempt |
+| `ASSESSMENT_SHUTDOWN_TIMEOUT_SECONDS` | `30` | Graceful in-process job drain window |
+
+Invalid numeric ranges and chunk-overlap combinations fail configuration
+validation at startup rather than causing runtime failures.
+
+## Runtime and reliability
+
+- Evaluation jobs run as tracked `asyncio` tasks in the API process. On graceful
+  shutdown, the service waits for the configured drain period, then cancels
+  remaining jobs and records them as failed.
+- The task queue is **not durable**. A process crash or forced kill can leave an
+  assessment in `PROCESSING`; production multi-replica deployments should add
+  a durable worker/queue and recovery policy before relying on this service.
+- Uploaded bytes are stored on a local filesystem volume. All replicas must
+  share durable storage or use an object-storage implementation before scaling
+  horizontally.
+- Elasticsearch conditionally claims an assessment to prevent simultaneous
+  evaluation requests from starting duplicate runs. An assessment is a
+  single-run audit record; create a new assessment to retry or re-evaluate so
+  prior per-rule results cannot leak into a new partial run.
+- `/health` is a process liveness check. `/ready` checks Elasticsearch and the
+  configured model providers and returns HTTP 503 when any dependency is
+  unavailable.
+- Scanned/image-only PDFs are not OCR'd. The request is reported as an
+  extraction failure rather than silently evaluated as empty evidence.
 
 ## Testing
 
 ```bash
-make test-unit          # 40 unit tests, no services needed
+make test-unit          # offline tests; no external services needed
+make lint               # static lint checks
 make test-integration   # needs ES + Ollama (COMPLIANCE_IT=1)
 make e2e                # full API flow against running stack
 ```
 
-Unit tests cover: PDF extraction fidelity, chunk boundaries/metadata,
-explicit+heuristic+LLM classification, verbatim citation enforcement,
-verdict semantics (partial→NOT_COMPLIANT, no-citation downgrade),
-prompt-injection resistance, upload validation, aggregation, and the full
-LangGraph workflow with fake services.
+Tests cover extraction fidelity, upload limits, DOCX archive expansion,
+provider retry/model contracts, framework-scoped rule loading, Elasticsearch
+retrieval scoring and partial failures, citation enforcement, prompt-injection
+handling, assessment lifecycle, and the graph with fake dependencies.
+
+## Open-source hygiene
+
+Contributions should include focused tests and documentation for changed
+behavior; run `make test` before submitting. See [CONTRIBUTING.md](CONTRIBUTING.md)
+and [SECURITY.md](SECURITY.md). This repository does not currently select a
+software license; add a maintainer-approved `LICENSE` before redistributing it.
 
 ## Layout
 

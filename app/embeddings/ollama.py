@@ -1,7 +1,7 @@
 """Ollama embeddings provider — uses /api/embed (batched)."""
 
 import httpx
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from app.config import Settings, get_settings
 from app.core.errors import EmbeddingError
@@ -28,17 +28,21 @@ class OllamaEmbeddingProvider:
     def dims(self) -> int:
         return self._dims
 
-    @retry(
-        retry=retry_if_exception_type((httpx.TransportError, httpx.TimeoutException)),
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=8),
-        reraise=True,
-    )
     async def _embed_batch(self, texts: list[str]) -> list[list[float]]:
-        resp = await self._client.post("/api/embed", json={"model": self._model, "input": texts})
-        resp.raise_for_status()
-        data = resp.json()
-        return data["embeddings"]
+        retryer = AsyncRetrying(
+            retry=retry_if_exception_type((httpx.TransportError, httpx.TimeoutException)),
+            stop=stop_after_attempt(1 + self.settings.embedding_max_retries),
+            wait=wait_exponential(multiplier=1, min=1, max=8),
+            reraise=True,
+        )
+        async for attempt in retryer:
+            with attempt:
+                resp = await self._client.post(
+                    "/api/embed", json={"model": self._model, "input": texts}
+                )
+                resp.raise_for_status()
+                return resp.json()["embeddings"]
+        raise AssertionError("Retry loop ended without a result")
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -51,6 +55,10 @@ class OllamaEmbeddingProvider:
                 vectors.extend(await self._embed_batch(chunk))
             except Exception as exc:  # noqa: BLE001
                 raise EmbeddingError(f"Ollama embedding failed: {exc}") from exc
+        if len(vectors) != len(texts):
+            raise EmbeddingError(
+                f"Embedding count mismatch: requested {len(texts)}, received {len(vectors)}"
+            )
         for vec in vectors:
             if len(vec) != self._dims:
                 raise EmbeddingError(
@@ -64,7 +72,12 @@ class OllamaEmbeddingProvider:
             resp = await self._client.get("/api/tags")
             if resp.status_code != 200:
                 return False
-            models = {m.get("name", "").split(":")[0] for m in resp.json().get("models", [])}
-            return self._model.split(":")[0] in models
+            models = {m.get("name", "") for m in resp.json().get("models", [])}
+            return self._model in models or (
+                ":" not in self._model and f"{self._model}:latest" in models
+            )
         except Exception:  # noqa: BLE001
             return False
+
+    async def close(self) -> None:
+        await self._client.aclose()

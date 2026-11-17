@@ -147,9 +147,7 @@ def make_persist_assessment(ctx: GraphContext):
 
         if fatal:
             status = AssessmentStatus.FAILED if not results else AssessmentStatus.PARTIAL
-        elif errors and persisted < len(results):
-            status = AssessmentStatus.PARTIAL
-        elif any(e.code == "missing_evaluation" for e in errors):
+        elif errors:
             status = AssessmentStatus.PARTIAL
         else:
             status = AssessmentStatus.COMPLETED

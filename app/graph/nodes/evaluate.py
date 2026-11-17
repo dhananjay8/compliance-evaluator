@@ -48,17 +48,33 @@ def make_retrieve_policy_evidence(ctx: GraphContext):
         pending = list(state.get("pending_rule_ids", []))
         rules = {r.rule_id: r for r in state.get("rules", [])}
         if not pending:
-            return {"current_rule_id": None, "retrieved_evidence": []}
+            return {
+                "current_rule_id": None,
+                "current_rule_error": None,
+                "retrieved_evidence": [],
+            }
 
         rule_id = pending.pop(0)
         rule = rules[rule_id]
         errors = list(state.get("errors", []))
+        retrieval_error: str | None = None
         try:
             evidence = await ctx.retriever.retrieve_for_rule(state["assessment_id"], rule)
         except Exception as exc:  # noqa: BLE001
+            retrieval_error = getattr(exc, "code", "retrieval_error")
+            log.error(
+                "rule_retrieval_failed",
+                assessment_id=state["assessment_id"],
+                rule_id=rule_id,
+                code=retrieval_error,
+                error=str(exc),
+            )
             errors.append(WorkflowError(
-                node="retrieve_policy_evidence", code="retrieval_error",
-                message=str(exc)[:500], retryable=True, rule_id=rule_id,
+                node="retrieve_policy_evidence",
+                code=retrieval_error,
+                message=str(exc)[:500],
+                retryable=getattr(exc, "retryable", True),
+                rule_id=rule_id,
             ))
             evidence = []
 
@@ -67,6 +83,7 @@ def make_retrieve_policy_evidence(ctx: GraphContext):
         return {
             "pending_rule_ids": pending,
             "current_rule_id": rule_id,
+            "current_rule_error": retrieval_error,
             "retrieved_evidence": evidence,
             "errors": errors,
             "timings": timings,
@@ -84,8 +101,10 @@ def make_evaluate_evidence(ctx: GraphContext):
         errors = list(state.get("errors", []))
         evaluations = list(state.get("evaluations", []))
 
-        if rule is None:
-            return {"errors": errors}
+        if rule is None or state.get("current_rule_error"):
+            timings = dict(state.get("timings", {}))
+            timings[f"evaluate:{rule_id or 'unknown'}"] = time.perf_counter() - started
+            return {"errors": errors, "timings": timings}
 
         try:
             evaluation = await ctx.evaluator.evaluate(rule, state.get("retrieved_evidence", []))

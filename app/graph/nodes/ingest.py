@@ -2,7 +2,7 @@
 
 import time
 
-from app.core.errors import AppError, DocumentExtractionError
+from app.core.errors import DocumentExtractionError
 from app.core.logging import get_logger
 from app.graph.context import GraphContext
 from app.graph.state import ComplianceState

@@ -9,7 +9,7 @@ ES_URL_IN_NET ?= http://$(ES):9200
 OLLAMA_MODEL  ?= qwen2.5:3b
 EMBED_MODEL   ?= nomic-embed-text
 
-.PHONY: help up down build logs ollama-pull es seed indices fixtures test test-unit test-integration e2e clean
+.PHONY: help up down build logs ollama-pull es seed indices fixtures test test-unit test-integration lint e2e clean
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-18s %s\n", $$1, $$2}'
@@ -72,6 +72,9 @@ test-integration: ## Integration tests (needs ES + Ollama running)
 	COMPLIANCE_IT=1 uv run --extra dev pytest tests/integration -q
 
 test: test-unit ## Default: unit tests
+
+lint: ## Run Ruff lint checks
+	uv run --extra dev ruff check app tests scripts
 
 e2e: ## Full API e2e against running stack
 	bash scripts/e2e_demo.sh

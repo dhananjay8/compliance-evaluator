@@ -45,6 +45,7 @@ class ComplianceState(TypedDict, total=False):
 
     # per-rule working set
     retrieved_evidence: list[RetrievedEvidence]
+    current_rule_error: str | None  # operational failure; never interpret as ABSENT evidence
     current_evaluation: ComplianceEvaluation | None
 
     # outputs

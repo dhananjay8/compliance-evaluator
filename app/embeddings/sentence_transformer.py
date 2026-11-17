@@ -8,9 +8,6 @@ import asyncio
 
 from app.config import Settings, get_settings
 from app.core.errors import EmbeddingError
-from app.core.logging import get_logger
-
-log = get_logger(__name__)
 
 
 class SentenceTransformerProvider:
@@ -27,10 +24,9 @@ class SentenceTransformerProvider:
         self._model = SentenceTransformer(self._model_name)
         self._dims = self._model.get_sentence_embedding_dimension()
         if self._dims != self.settings.embedding_dims:
-            log.warning(
-                "embedding_dims_mismatch",
-                configured=self.settings.embedding_dims,
-                actual=self._dims,
+            raise EmbeddingError(
+                f"Embedding dimension mismatch for {self._model_name}: configured "
+                f"{self.settings.embedding_dims}, model provides {self._dims}"
             )
 
     @property
@@ -54,3 +50,6 @@ class SentenceTransformerProvider:
 
     async def health(self) -> bool:
         return self._model is not None
+
+    async def close(self) -> None:
+        return None

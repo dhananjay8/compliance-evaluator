@@ -1,6 +1,6 @@
 """API request/response payloads."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.document import DocumentCategory
 
@@ -31,8 +31,9 @@ class DocumentUploadResponse(BaseModel):
 
 
 class EvaluateRequest(BaseModel):
-    rule_ids: list[str] | None = None  # optional scoping for demos/tests
-    framework: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    rule_ids: list[str] | None = Field(default=None, min_length=1)
 
 
 class EvaluateResponse(BaseModel):

@@ -11,14 +11,15 @@ __all__ = ["DocumentExtractor", "DocxExtractor", "PdfExtractor"]
 
 
 class DocumentExtractor:
-    """Routes to the format-specific extractor (.pdf, .docx)."""
+    """Routes by the validated source filename, not the opaque storage suffix."""
 
     def __init__(self) -> None:
         self._pdf = PdfExtractor()
         self._docx = DocxExtractor()
 
     def extract(self, doc_ref: DocumentRef, path: Path) -> ExtractedDocument:
-        ext = path.suffix.lower() or Path(doc_ref.filename).suffix.lower()
+        # Storage uses opaque IDs; the validated original filename determines format.
+        ext = Path(doc_ref.filename).suffix.lower()
         if ext == ".docx":
             return self._docx.extract(doc_ref, path)
         if ext == ".pdf":

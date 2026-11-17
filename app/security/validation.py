@@ -18,14 +18,18 @@ _MAGIC_BY_EXT: dict[str, bytes] = {
 }
 
 _INJECTION_PATTERNS = [
-    re.compile(r"ignore\s+(all\s+)?(previous|prior|above)\s+(instructions?|rules?|prompts?)", re.I),
-    re.compile(r"disregard\s+(all\s+)?(previous|prior|above)", re.I),
-    re.compile(r"you\s+are\s+now\s+(a|an)\s+", re.I),
-    re.compile(r"system\s*:\s*", re.I),
-    re.compile(r"\bassistant\s*:\s*", re.I),
-    re.compile(r"mark\s+(this|all|every)\s+(rule|criterion|control)s?\s+(as\s+)?compliant", re.I),
-    re.compile(r"(say|respond|answer|output|return)\s+[\"']?compliant[\"']?", re.I),
-    re.compile(r"<\s*/?\s*(system|instruction|prompt)\s*>", re.I),
+    ("instruction_override", re.compile(
+        r"ignore\s+(all\s+)?(previous|prior|above)\s+(instructions?|rules?|prompts?)", re.I
+    )),
+    ("instruction_disregard", re.compile(r"disregard\s+(all\s+)?(previous|prior|above)", re.I)),
+    ("role_hijack", re.compile(r"you\s+are\s+now\s+(a|an)\s+", re.I)),
+    ("system_role_label", re.compile(r"system\s*:\s*", re.I)),
+    ("assistant_role_label", re.compile(r"\bassistant\s*:\s*", re.I)),
+    ("forced_compliance", re.compile(
+        r"mark\s+(this|all|every)\s+(rule|criterion|control)s?\s+(as\s+)?compliant", re.I
+    )),
+    ("forced_output", re.compile(r"(say|respond|answer|output|return)\s+[\"']?compliant[\"']?", re.I)),
+    ("xml_instruction_tag", re.compile(r"<\s*/?\s*(system|instruction|prompt)\s*>", re.I)),
 ]
 
 
@@ -58,16 +62,33 @@ def validate_upload(filename: str, data: bytes, settings: Settings | None = None
     magic = _MAGIC_BY_EXT.get(ext)
     if magic and not data.startswith(magic):
         raise UploadValidationError(f"File is not a valid {ext} (bad magic bytes)")
-    if ext == ".docx" and not zipfile.is_zipfile(io.BytesIO(data)):
-        raise UploadValidationError("File is not a valid .docx (not a zip container)")
+    if ext == ".docx":
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                members = archive.infolist()
+                if len(members) > settings.max_docx_archive_members:
+                    raise UploadValidationError(
+                        f"DOCX archive contains too many entries ({len(members)})"
+                    )
+                expanded_size = sum(member.file_size for member in members)
+                max_expanded_size = settings.max_docx_uncompressed_size_mb * 1024 * 1024
+                if expanded_size > max_expanded_size:
+                    raise UploadValidationError(
+                        "DOCX expands beyond the "
+                        f"{settings.max_docx_uncompressed_size_mb} MB safety limit"
+                    )
+                if "word/document.xml" not in archive.namelist():
+                    raise UploadValidationError("File is not a valid .docx (missing document.xml)")
+        except (zipfile.BadZipFile, OSError) as exc:
+            raise UploadValidationError("File is not a valid .docx (invalid zip container)") from exc
     return safe_name
 
 
 def detect_prompt_injection(text: str) -> list[str]:
-    """Return matched injection-pattern descriptions for observability."""
+    """Return safe pattern identifiers, never excerpts from sensitive policy text."""
     findings: list[str] = []
-    for pattern in _INJECTION_PATTERNS:
+    for name, pattern in _INJECTION_PATTERNS:
         match = pattern.search(text)
         if match:
-            findings.append(match.group(0)[:80])
+            findings.append(name)
     return findings

@@ -76,6 +76,20 @@ class ElasticsearchStore:
         except Exception as exc:  # noqa: BLE001
             raise ElasticsearchError(f"Failed to index document {doc.document_id}: {exc}") from exc
 
+    async def delete_document(self, document_id: str) -> None:
+        """Delete a newly-created document record during upload compensation."""
+        try:
+            await self.client.delete(
+                index=self._idx(self.settings.idx_policy_documents),
+                id=document_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            if getattr(exc, "status_code", None) == 404 or "not_found" in str(exc):
+                return
+            raise ElasticsearchError(
+                f"Failed to remove document {document_id}: {exc}"
+            ) from exc
+
     async def update_document_classification(self, document_id: str, document_type: str,
                                              source: str, confidence: float) -> None:
         try:
@@ -140,7 +154,13 @@ class ElasticsearchStore:
             success, errors = await async_bulk(self.client, actions, raise_on_error=False)
             if errors:
                 log.error("chunk_bulk_partial_failure", failed=len(errors), index=index)
+                raise ElasticsearchError(
+                    f"Bulk chunk indexing partially failed: {len(errors)} of "
+                    f"{len(actions)} chunks"
+                )
             return int(success)
+        except ElasticsearchError:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise ElasticsearchError(f"Bulk chunk indexing failed: {exc}") from exc
 
@@ -159,7 +179,12 @@ class ElasticsearchStore:
                          query_text: str, top_k: int, min_similarity: float,
                          document_types: list[str] | None = None,
                          bm25_candidates: int = 8) -> list[RetrievedEvidence]:
-        """kNN + BM25 hybrid with metadata filters, deduplicated by chunk_id."""
+        """Run both retrieval legs; incomplete hybrid results are an operational error.
+
+        kNN scores are Elasticsearch's normalized cosine scores in [0, 1].
+        Returning an empty list is reserved for two successful searches with no
+        qualifying evidence, so callers can distinguish absence from outage.
+        """
         index = self._idx(self.settings.idx_policy_chunks)
         filters: list[dict] = [{"term": {"assessment_id": assessment_id}}]
         if document_types:
@@ -168,6 +193,7 @@ class ElasticsearchStore:
         evidence: dict[str, RetrievedEvidence] = {}
 
         # --- vector leg ---
+        failures: list[str] = []
         try:
             knn_resp = await self.client.search(
                 index=index,
@@ -183,8 +209,8 @@ class ElasticsearchStore:
                          "page_number", "section", "text"],
             )
             for hit in knn_resp["hits"]["hits"]:
-                # cosine similarity in ES maps to score in [0..2]; normalize to [0..1]
-                score = max(0.0, min(1.0, (hit["_score"] or 0.0) - 1.0)) if hit["_score"] else 0.0
+                # Elasticsearch maps cosine similarity to (_score + 1) / 2.
+                score = max(0.0, min(1.0, hit.get("_score") or 0.0))
                 if score < min_similarity:
                     continue
                 src = hit["_source"]
@@ -200,6 +226,7 @@ class ElasticsearchStore:
                     retrieval_method="knn",
                 )
         except Exception as exc:  # noqa: BLE001
+            failures.append("vector")
             log.error("knn_search_failed", error=str(exc), assessment_id=assessment_id)
 
         # --- BM25 leg ---
@@ -233,7 +260,14 @@ class ElasticsearchStore:
                     retrieval_method="bm25",
                 )
         except Exception as exc:  # noqa: BLE001
+            failures.append("keyword")
             log.error("bm25_search_failed", error=str(exc), assessment_id=assessment_id)
+
+        if failures:
+            failed_legs = ", ".join(failures)
+            raise ElasticsearchError(
+                f"Hybrid evidence retrieval incomplete; failed search leg(s): {failed_legs}"
+            )
 
         ranked = sorted(evidence.values(), key=lambda e: e.similarity_score, reverse=True)
         return ranked
@@ -257,8 +291,24 @@ class ElasticsearchStore:
         index = self._idx(self.settings.idx_compliance_rules)
         try:
             if rule_ids:
-                resp = await self.client.mget(index=index, ids=rule_ids)
-                rules = [ComplianceRule(**d["_source"]) for d in resp["docs"] if d.get("found")]
+                requested_ids = list(dict.fromkeys(rule_ids))
+                resp = await self.client.mget(index=index, ids=requested_ids)
+                loaded = [
+                    ComplianceRule(**doc["_source"])
+                    for doc in resp["docs"]
+                    if doc.get("found")
+                ]
+                valid_rules = [
+                    rule for rule in loaded if rule.framework == framework and rule.active
+                ]
+                valid_ids = {rule.rule_id for rule in valid_rules}
+                invalid_ids = [rule_id for rule_id in requested_ids if rule_id not in valid_ids]
+                if invalid_ids:
+                    raise RuleLoadError(
+                        f"Requested rules are missing, inactive, or outside framework "
+                        f"{framework}: {', '.join(invalid_ids)}"
+                    )
+                rules = valid_rules
             else:
                 rules = []
                 async for doc in self._scan(
@@ -269,7 +319,7 @@ class ElasticsearchStore:
                     ]}},
                 ):
                     rules.append(ComplianceRule(**doc))
-        except ElasticsearchError:
+        except (ElasticsearchError, RuleLoadError):
             raise
         except Exception as exc:  # noqa: BLE001
             raise RuleLoadError(f"Failed to load rules: {exc}") from exc
@@ -312,17 +362,57 @@ class ElasticsearchStore:
 
     async def update_assessment_status(self, assessment_id: str, status: AssessmentStatus,
                                        error: str | None = None) -> None:
-        doc: dict[str, Any] = {"status": status.value, "updated_at": _utcnow_iso()}
+        now = _utcnow_iso()
+        doc: dict[str, Any] = {
+            "status": status.value,
+            "updated_at": now,
+            "error": error,
+        }
         if status in (AssessmentStatus.COMPLETED, AssessmentStatus.FAILED, AssessmentStatus.PARTIAL):
-            doc["completed_at"] = _utcnow_iso()
-        if error:
-            doc["error"] = error
+            doc["completed_at"] = now
+        else:
+            doc["completed_at"] = None
         try:
             await self.client.update(
                 index=self._idx(self.settings.idx_assessments), id=assessment_id, doc=doc
             )
         except Exception as exc:  # noqa: BLE001
             raise ElasticsearchError(f"Failed to update assessment status: {exc}") from exc
+
+    async def try_start_assessment(self, assessment_id: str) -> bool:
+        """Atomically claim an assessment unless another request is already running it."""
+        now = _utcnow_iso()
+        try:
+            response = await self.client.update(
+                index=self._idx(self.settings.idx_assessments),
+                id=assessment_id,
+                retry_on_conflict=3,
+                script={
+                    "lang": "painless",
+                    "source": (
+                        "if (ctx._source.status != params.pending) { "
+                        "ctx.op = 'noop'; "
+                        "} else { "
+                        "ctx._source.status = params.processing; "
+                        "ctx._source.updated_at = params.now; "
+                        "ctx._source.completed_at = null; "
+                        "ctx._source.error = null; "
+                        "}"
+                    ),
+                    "params": {
+                        "pending": AssessmentStatus.PENDING.value,
+                        "processing": AssessmentStatus.PROCESSING.value,
+                        "now": now,
+                    },
+                },
+            )
+            return response.get("result") == "updated"
+        except Exception as exc:  # noqa: BLE001
+            if getattr(exc, "status_code", None) == 404 or "not_found" in str(exc):
+                return False
+            raise ElasticsearchError(
+                f"Failed to claim assessment {assessment_id}: {exc}"
+            ) from exc
 
     async def save_result(self, assessment_id: str, result: CriterionResult) -> None:
         body = result.model_dump(mode="json")

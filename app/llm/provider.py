@@ -32,6 +32,8 @@ class LLMProvider(Protocol):
 
     async def health(self) -> bool: ...
 
+    async def close(self) -> None: ...
+
 
 _provider: LLMProvider | None = None
 
@@ -54,3 +56,11 @@ def get_llm_provider(settings: Settings | None = None) -> LLMProvider:
 def reset_llm_provider() -> None:
     global _provider
     _provider = None
+
+
+async def close_llm_provider() -> None:
+    global _provider
+    provider = _provider
+    _provider = None
+    if provider is not None:
+        await provider.close()

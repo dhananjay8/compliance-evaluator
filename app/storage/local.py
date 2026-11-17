@@ -1,9 +1,11 @@
-"""Safe local filesystem storage for uploaded PDFs.
+"""Safe local filesystem storage for uploaded document bytes.
 
-Layout: {upload_dir}/{assessment_id}/{document_id}.pdf
-Path traversal is impossible by construction: filenames are never used as paths.
+Layout: {upload_dir}/{assessment_id}/{document_id}.pdf. The suffix is an
+internal storage convention; extraction uses the validated document filename
+to select the parser. User filenames are never used as filesystem paths.
 """
 
+import asyncio
 from pathlib import Path
 
 import aiofiles
@@ -23,19 +25,32 @@ class LocalStorage:
             if "/" in value or "\\" in value or ".." in value:
                 raise StorageError(f"Unsafe identifier rejected: {value!r}")
         path = (self.root / assessment_id / f"{document_id}.pdf").resolve()
-        if not str(path).startswith(str(self.root)):
-            raise StorageError("Resolved path escapes upload root")
+        try:
+            path.relative_to(self.root)
+        except ValueError as exc:
+            raise StorageError("Resolved path escapes upload root") from exc
         return path
 
     async def save(self, assessment_id: str, document_id: str, data: bytes) -> Path:
         path = self._safe_path(assessment_id, document_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        async with aiofiles.open(path, "wb") as fh:
-            await fh.write(data)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            async with aiofiles.open(path, "wb") as fh:
+                await fh.write(data)
+        except OSError as exc:
+            raise StorageError(f"Failed to store document {document_id}: {exc}") from exc
         return path
 
     def path_for(self, assessment_id: str, document_id: str) -> Path:
         return self._safe_path(assessment_id, document_id)
+
+    async def delete(self, assessment_id: str, document_id: str) -> None:
+        """Remove an upload during compensation after its metadata write fails."""
+        path = self._safe_path(assessment_id, document_id)
+        try:
+            await asyncio.to_thread(path.unlink, missing_ok=True)
+        except OSError as exc:
+            raise StorageError(f"Failed to remove document {document_id}: {exc}") from exc
 
     async def read(self, assessment_id: str, document_id: str) -> bytes:
         path = self._safe_path(assessment_id, document_id)
